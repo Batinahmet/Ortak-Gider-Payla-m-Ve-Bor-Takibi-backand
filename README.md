@@ -30,6 +30,10 @@ npm test
 `ANTHROPIC_API_KEY` boşsa fiş okuma ve özet uçları 503 döner, geri kalanı çalışır.
 `CORS_ORIGIN` frontend'in adresiyle aynı olmalıdır.
 
+## Veritabanı
+
+ER diyagramı ve tablo açıklamaları: [docs/er-diyagrami.md](docs/er-diyagrami.md)
+
 ## API özeti
 
 `POST /api/auth/register|login|logout`, `GET /api/me`

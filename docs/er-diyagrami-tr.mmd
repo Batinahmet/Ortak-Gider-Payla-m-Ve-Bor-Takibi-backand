@@ -1,0 +1,77 @@
+erDiagram
+  KULLANICILAR ||--o{ OTURUMLAR : "oturum açar"
+  KULLANICILAR ||--o{ GRUPLAR : "sahibidir"
+  KULLANICILAR ||--o{ UYELER : "üye olur"
+  GRUPLAR ||--o{ UYELER : "üyeleri içerir"
+  GRUPLAR ||--o{ HARCAMALAR : "harcamaları içerir"
+  KULLANICILAR ||--o{ HARCAMALAR : "öder (odeyen_id)"
+  KULLANICILAR ||--o{ HARCAMALAR : "ekler (ekleyen_id)"
+  HARCAMALAR ||--o{ HARCAMA_PAYLARI : "paylara bölünür"
+  KULLANICILAR ||--o{ HARCAMA_PAYLARI : "pay sahibidir"
+  GRUPLAR ||--o{ ODEMELER : "ödeme kayıtlarını içerir"
+  KULLANICILAR ||--o{ ODEMELER : "öder (gonderen_id)"
+  KULLANICILAR ||--o{ ODEMELER : "alır (alici_id)"
+  GRUPLAR ||--o{ KURALLAR : "öğrenilen kurallar"
+  GRUPLAR ||--o{ ETKINLIKLER : "etkinlik akışı"
+  KULLANICILAR ||--o{ ETKINLIKLER : "yapar (yapan_id)"
+
+  KULLANICILAR {
+    metin kullanici_id PK
+    metin ad
+    metin eposta UK
+    metin sifre_ozeti
+    tamsayi olusturma_zamani
+  }
+  OTURUMLAR {
+    metin belirtec_ozeti PK
+    metin kullanici_id FK
+    tamsayi bitis_zamani
+  }
+  GRUPLAR {
+    metin grup_id PK
+    metin ad
+    metin sahip_id FK
+    metin davet_kodu UK
+    tamsayi olusturma_zamani
+  }
+  UYELER {
+    metin grup_id PK,FK
+    metin kullanici_id PK,FK
+    tamsayi katilma_zamani
+  }
+  HARCAMALAR {
+    metin harcama_id PK
+    metin grup_id FK
+    metin baslik
+    tamsayi tutar "kuruş"
+    metin odeyen_id FK
+    metin ekleyen_id FK
+    metin bolusum_tipi
+    metin kalemler_json
+    tamsayi olusturma_zamani
+  }
+  HARCAMA_PAYLARI {
+    metin harcama_id PK,FK
+    metin kullanici_id PK,FK
+    tamsayi pay "kuruş"
+  }
+  ODEMELER {
+    metin odeme_id PK
+    metin grup_id FK
+    metin gonderen_id FK
+    metin alici_id FK
+    tamsayi tutar "kuruş"
+    tamsayi olusturma_zamani
+  }
+  KURALLAR {
+    metin grup_id PK,FK
+    metin kalem PK
+    metin tur "ortak veya kişisel"
+  }
+  ETKINLIKLER {
+    tamsayi etkinlik_id PK
+    metin grup_id FK
+    metin yapan_id FK
+    metin mesaj
+    tamsayi olusturma_zamani
+  }

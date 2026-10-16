@@ -1,0 +1,77 @@
+erDiagram
+  USERS ||--o{ SESSIONS : "oturum açar"
+  USERS ||--o{ GROUPS : "sahibidir"
+  USERS ||--o{ MEMBERS : "üye olur"
+  GROUPS ||--o{ MEMBERS : "üyeleri içerir"
+  GROUPS ||--o{ EXPENSES : "harcamaları içerir"
+  USERS ||--o{ EXPENSES : "öder (paid_by)"
+  USERS ||--o{ EXPENSES : "ekler (created_by)"
+  EXPENSES ||--o{ EXPENSE_SPLITS : "paylara bölünür"
+  USERS ||--o{ EXPENSE_SPLITS : "pay sahibi"
+  GROUPS ||--o{ SETTLEMENTS : "ödeme kayıtları"
+  USERS ||--o{ SETTLEMENTS : "öder (from_user)"
+  USERS ||--o{ SETTLEMENTS : "alır (to_user)"
+  GROUPS ||--o{ RULES : "öğrenilen kurallar"
+  GROUPS ||--o{ ACTIVITIES : "etkinlik akışı"
+  USERS ||--o{ ACTIVITIES : "yapar (actor_id)"
+
+  USERS {
+    text id PK
+    text name
+    text email UK
+    text password_hash
+    int created_at
+  }
+  SESSIONS {
+    text token_hash PK
+    text user_id FK
+    int expires_at
+  }
+  GROUPS {
+    text id PK
+    text name
+    text owner_id FK
+    text invite_code UK
+    int created_at
+  }
+  MEMBERS {
+    text group_id PK,FK
+    text user_id PK,FK
+    int joined_at
+  }
+  EXPENSES {
+    text id PK
+    text group_id FK
+    text title
+    int amount "kuruş"
+    text paid_by FK
+    text created_by FK
+    text split_type
+    text items_json
+    int created_at
+  }
+  EXPENSE_SPLITS {
+    text expense_id PK,FK
+    text user_id PK,FK
+    int share "kuruş"
+  }
+  SETTLEMENTS {
+    text id PK
+    text group_id FK
+    text from_user FK
+    text to_user FK
+    int amount "kuruş"
+    int created_at
+  }
+  RULES {
+    text group_id PK,FK
+    text item PK
+    text kind "ortak veya kisisel"
+  }
+  ACTIVITIES {
+    int id PK
+    text group_id FK
+    text actor_id FK
+    text message
+    int created_at
+  }
