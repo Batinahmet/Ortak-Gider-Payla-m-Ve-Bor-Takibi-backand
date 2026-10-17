@@ -1,6 +1,6 @@
 import { scrypt, randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { promisify } from 'node:util';
-import { db } from './db.js';
+import * as data from './data/index.js';
 
 const scryptAsync = promisify(scrypt);
 const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -22,30 +22,21 @@ export async function verifyPassword(password, stored) {
 /** Yeni oturum açar; ham belirteç sadece istemciye döner, veritabanında özeti saklanır. */
 export function newSession(userId) {
   const token = randomBytes(32).toString('hex');
-  db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(
-    sha256(token),
-    userId,
-    Date.now() + SESSION_MS,
-  );
+  data.createSession(sha256(token), userId, Date.now() + SESSION_MS);
   return token;
 }
 
 export function destroySession(token) {
-  db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(sha256(token));
+  data.deleteSession(sha256(token));
 }
 
 export function requireAuth(req, res, next) {
   const header = req.get('authorization') || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (token) {
-    const row = db
-      .prepare(
-        `SELECT u.id, u.name, u.email FROM sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash = ? AND s.expires_at > ?`,
-      )
-      .get(sha256(token), Date.now());
-    if (row) {
-      req.user = row;
+    const user = data.findUserBySession(sha256(token));
+    if (user) {
+      req.user = user;
       req.token = token;
       return next();
     }

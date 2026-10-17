@@ -1,7 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import { randomBytes } from 'node:crypto';
-import { db, tx } from './db.js';
+import { tx } from './db.js';
+import * as data from './data/index.js';
 import { hashPassword, verifyPassword, newSession, destroySession, requireAuth } from './auth.js';
 import {
   splitEqual,
@@ -21,6 +22,7 @@ class HttpError extends Error {
 }
 const bad = (msg) => new HttpError(400, msg);
 
+const { logActivity } = data;
 const id = () => randomBytes(8).toString('hex');
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const inviteCode = () =>
@@ -75,11 +77,9 @@ export function createApp() {
       const password = req.body.password;
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw bad('Geçersiz e-posta');
       if (typeof password !== 'string' || password.length < 8) throw bad('Şifre en az 8 karakter olmalı');
-      if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) throw new HttpError(409, 'Bu e-posta zaten kayıtlı');
+      if (data.emailExists(email)) throw new HttpError(409, 'Bu e-posta zaten kayıtlı');
       const userId = id();
-      db.prepare('INSERT INTO users (id, name, email, password_hash, created_at) VALUES (?,?,?,?,?)').run(
-        userId, name, email, await hashPassword(password), Date.now(),
-      );
+      data.createUser({ id: userId, name, email, passwordHash: await hashPassword(password) });
       res.status(201).json({ token: newSession(userId), user: { id: userId, name, email } });
     }),
   );
@@ -89,7 +89,7 @@ export function createApp() {
     limit(10, 60_000),
     wrap(async (req, res) => {
       const email = str(req.body.email, 'e-posta', 120).toLowerCase();
-      const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+      const user = data.findUserByEmail(email);
       const ok = user && typeof req.body.password === 'string' && (await verifyPassword(req.body.password, user.password_hash));
       if (!ok) throw new HttpError(401, 'E-posta veya şifre hatalı');
       res.json({ token: newSession(user.id), user: { id: user.id, name: user.name, email: user.email } });
@@ -105,56 +105,39 @@ export function createApp() {
 
   // ---------- Gruplar ----------
   api.get('/groups', requireAuth, (req, res) => {
-    const groups = db
-      .prepare(
-        `SELECT g.id, g.name FROM groups g JOIN members m ON m.group_id = g.id
-         WHERE m.user_id = ? ORDER BY g.created_at DESC`,
-      )
-      .all(req.user.id);
-    res.json({ groups });
+    res.json({ groups: data.listGroupsOfUser(req.user.id) });
   });
 
   api.post('/groups', requireAuth, (req, res) => {
     const name = str(req.body.name, 'grup adı', 60);
     const gid = id();
     tx(() => {
-      db.prepare('INSERT INTO groups (id, name, owner_id, invite_code, created_at) VALUES (?,?,?,?,?)').run(
-        gid, name, req.user.id, inviteCode(), Date.now(),
-      );
-      db.prepare('INSERT INTO members (group_id, user_id, joined_at) VALUES (?,?,?)').run(gid, req.user.id, Date.now());
+      data.createGroup({ id: gid, name, ownerId: req.user.id, inviteCode: inviteCode() });
+      data.addMember(gid, req.user.id);
     });
     res.status(201).json({ id: gid, name });
   });
 
   api.post('/groups/join', requireAuth, limit(20, 60_000), (req, res) => {
     const code = str(req.body.code, 'davet kodu', 20).toUpperCase();
-    const group = db.prepare('SELECT id, name FROM groups WHERE invite_code = ?').get(code);
+    const group = data.findGroupByInvite(code);
     if (!group) throw new HttpError(404, 'Davet kodu geçersiz');
-    const added = db
-      .prepare('INSERT OR IGNORE INTO members (group_id, user_id, joined_at) VALUES (?,?,?)')
-      .run(group.id, req.user.id, Date.now()).changes;
+    const added = data.addMember(group.id, req.user.id);
     if (added) logActivity(group.id, req.user.id, `${req.user.name} gruba katıldı`);
     res.json(group);
   });
 
   // Bu noktadan sonraki /groups/:gid/* uçları üyelik ister.
   const member = (req, res, next) => {
-    const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(req.params.gid);
-    const isMember =
-      group && db.prepare('SELECT 1 FROM members WHERE group_id = ? AND user_id = ?').get(group.id, req.user.id);
-    if (!isMember) return res.status(404).json({ error: 'Grup bulunamadı' });
+    const group = data.findGroup(req.params.gid);
+    if (!group || !data.isMember(group.id, req.user.id)) return res.status(404).json({ error: 'Grup bulunamadı' });
     req.group = group;
     next();
   };
   const groupRoutes = express.Router({ mergeParams: true });
   api.use('/groups/:gid', requireAuth, member, groupRoutes);
 
-  const members = (gid) =>
-    db
-      .prepare('SELECT u.id, u.name FROM members m JOIN users u ON u.id = m.user_id WHERE m.group_id = ? ORDER BY m.joined_at')
-      .all(gid);
-  const logActivity = (gid, actor, message) =>
-    db.prepare('INSERT INTO activities (group_id, actor_id, message, created_at) VALUES (?,?,?,?)').run(gid, actor, message, Date.now());
+  const members = data.listMembers;
   const tl = (k) => `${(k / 100).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺`;
 
   groupRoutes.get('/', (req, res) => {
@@ -163,15 +146,7 @@ export function createApp() {
   });
 
   // ---------- Harcamalar ----------
-  const loadExpenses = (gid) => {
-    const rows = db.prepare('SELECT * FROM expenses WHERE group_id = ? ORDER BY created_at DESC, id DESC').all(gid);
-    const splits = db
-      .prepare('SELECT s.expense_id, s.user_id, s.share FROM expense_splits s JOIN expenses e ON e.id = s.expense_id WHERE e.group_id = ?')
-      .all(gid);
-    const byExpense = {};
-    for (const s of splits) (byExpense[s.expense_id] ||= {})[s.user_id] = s.share;
-    return rows.map((e) => ({ ...e, splits: byExpense[e.id] || {} }));
-  };
+  const loadExpenses = data.listExpenses;
 
   groupRoutes.get('/expenses', (req, res) => {
     res.json({
@@ -225,22 +200,18 @@ export function createApp() {
 
     const eid = id();
     tx(() => {
-      db.prepare(
-        'INSERT INTO expenses (id, group_id, title, amount, paid_by, created_by, split_type, items_json, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-      ).run(eid, gid, title, amount, paidBy, req.user.id, type, items ? JSON.stringify(items) : null, Date.now());
-      const ins = db.prepare('INSERT INTO expense_splits (expense_id, user_id, share) VALUES (?,?,?)');
-      for (const [u, s] of Object.entries(shares)) if (s > 0) ins.run(eid, u, s);
+      data.insertExpense({ id: eid, groupId: gid, title, amount, paidBy, createdBy: req.user.id, splitType: type, items }, shares);
       logActivity(gid, req.user.id, `${req.user.name}, "${title}" harcamasını ekledi (${tl(amount)})`);
     });
     res.status(201).json({ id: eid, amount });
   });
 
   groupRoutes.delete('/expenses/:eid', (req, res) => {
-    const e = db.prepare('SELECT * FROM expenses WHERE id = ? AND group_id = ?').get(req.params.eid, req.group.id);
+    const e = data.findExpense(req.params.eid, req.group.id);
     if (!e) throw new HttpError(404, 'Harcama bulunamadı');
     if (e.created_by !== req.user.id && req.group.owner_id !== req.user.id) throw new HttpError(403, 'Sadece ekleyen veya grup sahibi silebilir');
     tx(() => {
-      db.prepare('DELETE FROM expenses WHERE id = ?').run(e.id);
+      data.deleteExpense(e.id);
       logActivity(req.group.id, req.user.id, `${req.user.name}, "${e.title}" harcamasını sildi`);
     });
     res.json({ ok: true });
@@ -249,7 +220,7 @@ export function createApp() {
   // ---------- Bakiye, borç netleştirme, ödeme kaydı ----------
   const currentBalances = (gid) => {
     const memberIds = members(gid).map((m) => m.id);
-    const settlements = db.prepare('SELECT from_user, to_user, amount FROM settlements WHERE group_id = ?').all(gid);
+    const settlements = data.listSettlements(gid);
     const balances = computeBalances(memberIds, loadExpenses(gid), settlements);
     return { balances, transfers: minimizeTransfers(balances) };
   };
@@ -260,19 +231,14 @@ export function createApp() {
     const to = req.body.to;
     const amount = kurus(req.body.amount, 'Tutar');
     if (!members(req.group.id).some((m) => m.id === to) || to === req.user.id) throw bad('Alıcı geçersiz');
-    db.prepare('INSERT INTO settlements (id, group_id, from_user, to_user, amount, created_at) VALUES (?,?,?,?,?,?)').run(
-      id(), req.group.id, req.user.id, to, amount, Date.now(),
-    );
+    data.insertSettlement({ id: id(), groupId: req.group.id, fromUser: req.user.id, toUser: to, amount });
     const toName = members(req.group.id).find((m) => m.id === to).name;
     logActivity(req.group.id, req.user.id, `${req.user.name}, ${toName} kişisine ${tl(amount)} ödedi`);
     res.status(201).json({ ok: true });
   });
 
   groupRoutes.get('/activity', (req, res) => {
-    const rows = db
-      .prepare('SELECT message, created_at AS createdAt FROM activities WHERE group_id = ? ORDER BY id DESC LIMIT 50')
-      .all(req.group.id);
-    res.json({ activity: rows });
+    res.json({ activity: data.listActivities(req.group.id) });
   });
 
   // ---------- Yapay zeka ----------
@@ -280,15 +246,13 @@ export function createApp() {
     aiEnabled() ? next() : res.status(503).json({ error: 'Yapay zeka kapalı: sunucuda ANTHROPIC_API_KEY tanımlı değil' });
 
   groupRoutes.get('/rules', (req, res) => {
-    res.json({ rules: db.prepare('SELECT item, kind FROM rules WHERE group_id = ?').all(req.group.id) });
+    res.json({ rules: data.listRules(req.group.id) });
   });
 
   groupRoutes.post('/rules', (req, res) => {
     const item = str(req.body.item, 'kalem', 80).toLowerCase();
     if (!['ortak', 'kisisel'].includes(req.body.kind)) throw bad('kind ortak veya kisisel olmalı');
-    db.prepare(
-      'INSERT INTO rules (group_id, item, kind) VALUES (?,?,?) ON CONFLICT(group_id, item) DO UPDATE SET kind = excluded.kind',
-    ).run(req.group.id, item, req.body.kind);
+    data.upsertRule(req.group.id, item, req.body.kind);
     res.json({ ok: true });
   });
 
@@ -296,7 +260,7 @@ export function createApp() {
     const { image, mediaType } = req.body;
     if (typeof image !== 'string' || image.length < 100 || image.length > 7_000_000) throw bad('Görsel geçersiz veya çok büyük');
     if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(mediaType)) throw bad('Desteklenmeyen görsel türü');
-    const rules = db.prepare('SELECT item, kind FROM rules WHERE group_id = ?').all(req.group.id);
+    const rules = data.listRules(req.group.id);
     const scan = await scanReceipt(image, mediaType, rules);
     // Öğrenilmiş kural tam eşleşirse yapay zeka önerisinin yerine geçer.
     const learned = new Map(rules.map((r) => [r.item, r.kind]));

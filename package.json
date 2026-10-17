@@ -10,6 +10,9 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
     "dev": "node --watch --env-file-if-exists=.env src/server.js",
+    "seed": "node --env-file-if-exists=.env db/seed.js",
+    "seed:reset": "node --env-file-if-exists=.env db/seed.js --reset",
+    "seed:dump": "node db/seed.js --dump=db/ornek-veri.sql",
     "test": "node --test"
   },
   "dependencies": {
