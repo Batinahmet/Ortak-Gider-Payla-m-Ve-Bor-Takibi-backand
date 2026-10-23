@@ -30,6 +30,8 @@ const USERS = [
   { id: 'u_zeynep', name: 'Zeynep Test', email: 'zeynep@example.com' },
   { id: 'u_can', name: 'Can Sentetik', email: 'can@example.com' },
 ];
+// Yönetici hesabı hiçbir gruba üye değildir; sadece rol tabanlı erişimi (/api/admin/*) göstermek içindir.
+const ADMIN = { id: 'u_admin', name: 'Yönetici Örnek', email: 'admin@example.com' };
 const nameOf = (id) => USERS.find((u) => u.id === id).name;
 const tl = (k) => `${(k / 100).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺`;
 
@@ -58,6 +60,7 @@ export async function seed({ reset = false } = {}) {
 
   tx(() => {
     for (const u of USERS) data.createUser({ ...u, passwordHash, createdAt: ago(40) });
+    data.createUser({ ...ADMIN, passwordHash, role: 'admin', createdAt: ago(41) });
 
     // ----- Grup 1: Ev arkadaşları (4 kişi) -----
     const ev = 'g_ev';
@@ -113,7 +116,7 @@ const q = (v) => (v === null || v === undefined ? 'NULL' : typeof v === 'number'
 export function dumpSql() {
   const out = [
     '-- Ortak Gider: sentetik örnek veri dökümü (gerçek kişisel veri yoktur, KVKK uyumlu).',
-    '-- Önce db/migrations/001_baslangic.sql, sonra bu dosya çalıştırılır.',
+    '-- Önce db/migrations/ altındaki tüm dosyalar sırayla (001, 002, ...), sonra bu dosya çalıştırılır.',
     `-- Örnek hesapların şifresi: ${DEMO_PASSWORD}`,
     'PRAGMA foreign_keys = ON;',
     'BEGIN;',
@@ -137,7 +140,7 @@ if (isMain) {
       writeFileSync(file, dumpSql());
       console.log('SQL dökümü yazıldı:', file);
     } else {
-      console.log(`Giriş için: ayse@example.com / ${DEMO_PASSWORD}`);
+      console.log(`Giriş için: ayse@example.com (kullanıcı) veya admin@example.com (yönetici) / ${DEMO_PASSWORD}`);
     }
   } catch (e) {
     console.error(e.message);

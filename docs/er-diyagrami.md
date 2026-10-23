@@ -1,6 +1,6 @@
 # Veritabanı ER Diyagramı
 
-Ortak Gider uygulamasının veri modeli: 9 varlık, 15 ilişki. Şema `src/db.js` içinde kuruludur.
+Ortak Gider uygulamasının veri modeli: 9 varlık, 15 ilişki. Şema `db/migrations/` altındaki dosyalarla kurulur (001: başlangıç, 002: roller ve giriş kilidi).
 
 ![ER diyagramı](er-diyagrami-tr.png)
 
@@ -14,7 +14,7 @@ Ortak Gider uygulamasının veri modeli: 9 varlık, 15 ilişki. Şema `src/db.js
 
 ## Diyagram ve kod eşleşmesi
 
-| Diyagram | Kod (`src/db.js`) |
+| Diyagram | Kod (tablo adı) |
 | --- | --- |
 | KULLANICILAR | `users` |
 | OTURUMLAR | `sessions` |
@@ -25,6 +25,8 @@ Ortak Gider uygulamasının veri modeli: 9 varlık, 15 ilişki. Şema `src/db.js
 | ODEMELER | `settlements` |
 | KURALLAR | `rules` |
 | ETKINLIKLER | `activities` |
+
+Kullanıcıdaki yeni sütunlar: `rol` = `role`, `basarisiz_deneme` = `failed_attempts`, `kilit_bitis` = `locked_until`.
 
 ## Mermaid kaynağı
 
@@ -53,6 +55,9 @@ erDiagram
     metin ad
     metin eposta UK
     metin sifre_ozeti
+    metin rol "user veya admin"
+    tamsayi basarisiz_deneme
+    tamsayi kilit_bitis
     tamsayi olusturma_zamani
   }
   OTURUMLAR {

@@ -2,8 +2,10 @@ import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.DB_PATH = ':memory:';
+process.env.AUTH_RATE_LIMIT = '1000'; // bu dosyadaki testler aynı IP'den çok sayıda giriş yapar
 delete process.env.ANTHROPIC_API_KEY;
 const { createApp } = await import('../src/app.js');
+const data = await import('../src/data/index.js');
 
 let server;
 let base;
@@ -71,4 +73,78 @@ test('uçtan uca: kayıt, grup, davet, harcama, bakiye, ödeme', async () => {
   assert.equal((await call('POST', `/groups/${g.id}/rules`, { item: 'Süt', kind: 'ortak' }, ali.token)).status, 200);
   assert.deepEqual((await call('GET', `/groups/${g.id}/rules`, null, ali.token)).data.rules, [{ item: 'süt', kind: 'ortak' }]);
   assert.ok((await call('GET', `/groups/${g.id}/activity`, null, ali.token)).data.activity.length >= 3);
+});
+
+const register = async (name, email) =>
+  (await call('POST', '/auth/register', { name, email, password: 'sifre1234' })).data;
+
+test('rol: kayıt isteğindeki role alanı yok sayılır (mass assignment), yeni kullanıcı daima user', async () => {
+  const r = await call('POST', '/auth/register', { name: 'Sinsi', email: 'sinsi@example.com', password: 'sifre1234', role: 'admin' });
+  assert.equal(r.status, 201);
+  assert.equal(r.data.user.role, 'user');
+  assert.equal(data.findUserById(r.data.user.id).role, 'user');
+  assert.equal((await call('GET', '/admin/users', null, r.data.token)).status, 403);
+});
+
+test('rol tabanlı erişim: oturumsuz 401, kullanıcı 403, yönetici 200; rol her istekte veritabanından okunur', async () => {
+  const user = await register('Normal', 'normal@example.com');
+  const boss = await register('Patron', 'patron@example.com');
+  data.setUserRole(boss.user.id, 'admin'); // ilk yönetici sunucu tarafında atanır
+
+  assert.equal((await call('GET', '/admin/users')).status, 401);
+  assert.equal((await call('GET', '/admin/users', null, user.token)).status, 403);
+  assert.equal((await call('PATCH', `/admin/users/${user.user.id}/role`, { role: 'admin' }, user.token)).status, 403, 'kullanıcı kendini yönetici yapamaz');
+  assert.equal(data.findUserById(user.user.id).role, 'user');
+
+  const list = await call('GET', '/admin/users', null, boss.token);
+  assert.equal(list.status, 200);
+  assert.ok(list.data.users.length >= 2);
+  for (const u of list.data.users) {
+    assert.ok(!('password_hash' in u) && !('passwordHash' in u), 'parola özeti sızmaz');
+    assert.ok('groupCount' in u);
+  }
+
+  assert.equal((await call('PATCH', `/admin/users/${user.user.id}/role`, { role: 'superadmin' }, boss.token)).status, 400);
+  assert.equal((await call('PATCH', `/admin/users/${boss.user.id}/role`, { role: 'user' }, boss.token)).status, 400, 'kendi rolünü değiştiremez');
+  assert.equal((await call('PATCH', '/admin/users/yok/role', { role: 'user' }, boss.token)).status, 404);
+  assert.equal((await call('PATCH', `/admin/users/${user.user.id}/role`, { role: 'admin' }, boss.token)).status, 200);
+  assert.equal((await call('GET', '/admin/users', null, user.token)).status, 200, 'yeni yönetici aynı oturumla erişir');
+  data.setUserRole(user.user.id, 'user');
+  assert.equal((await call('GET', '/admin/users', null, user.token)).status, 403, 'yetki geri alınınca erişim hemen kesilir');
+});
+
+test('giriş kilidi: 5 hatalı denemeden sonra doğru parola da 429 döner', async () => {
+  await register('Kilit', 'kilit@example.com');
+  for (let i = 0; i < 5; i++) {
+    const r = await call('POST', '/auth/login', { email: 'kilit@example.com', password: 'yanlis-sifre' });
+    assert.equal(r.status, 401);
+    assert.equal(r.data.error, 'E-posta veya şifre hatalı');
+  }
+  const locked = await call('POST', '/auth/login', { email: 'kilit@example.com', password: 'sifre1234' });
+  assert.equal(locked.status, 429);
+  assert.match(locked.data.error, /kilitlendi/);
+  assert.equal((await call('POST', '/auth/login', { email: 'yok@example.com', password: 'x' })).data.error, 'E-posta veya şifre hatalı');
+});
+
+test('profil: ad değiştirme ve şifre değiştirme (diğer oturumlar kapanır)', async () => {
+  await register('Profil', 'profil@example.com');
+  const login = async () => (await call('POST', '/auth/login', { email: 'profil@example.com', password: 'sifre1234' })).data;
+  const a = await login();
+  const b = await login();
+
+  const renamed = await call('PATCH', '/me', { name: 'Yeni Ad' }, a.token);
+  assert.equal(renamed.status, 200);
+  assert.equal((await call('GET', '/me', null, a.token)).data.user.name, 'Yeni Ad');
+  assert.equal((await call('PATCH', '/me', { name: '   ' }, a.token)).status, 400);
+  assert.equal((await call('PATCH', '/me', { name: 'x' })).status, 401);
+
+  assert.equal((await call('POST', '/me/password', { currentPassword: 'yanlis', newPassword: 'yeni-sifre-99' }, a.token)).status, 400);
+  assert.equal((await call('POST', '/me/password', { currentPassword: 'sifre1234', newPassword: 'kisa' }, a.token)).status, 400);
+  const ok = await call('POST', '/me/password', { currentPassword: 'sifre1234', newPassword: 'yeni-sifre-99' }, a.token);
+  assert.equal(ok.status, 200);
+  assert.ok(ok.data.closedSessions >= 1);
+  assert.equal((await call('GET', '/me', null, a.token)).status, 200, 'bu oturum açık');
+  assert.equal((await call('GET', '/me', null, b.token)).status, 401, 'diğer oturum kapandı');
+  assert.equal((await call('POST', '/auth/login', { email: 'profil@example.com', password: 'sifre1234' })).status, 401);
+  assert.equal((await call('POST', '/auth/login', { email: 'profil@example.com', password: 'yeni-sifre-99' })).status, 200);
 });

@@ -3,7 +3,11 @@ import cors from 'cors';
 import { randomBytes } from 'node:crypto';
 import { tx } from './db.js';
 import * as data from './data/index.js';
-import { hashPassword, verifyPassword, newSession, destroySession, requireAuth } from './auth.js';
+import {
+  hashPassword, newSession, destroySession, requireAuth, requireRole, login, changePassword,
+  validatePassword, publicUser, purgeExpiredSessions,
+} from './auth.js';
+import { HttpError, bad } from './errors.js';
 import {
   splitEqual,
   splitPercent,
@@ -13,14 +17,6 @@ import {
   minimizeTransfers,
 } from './split.js';
 import { aiEnabled, scanReceipt, summarizeDebts } from './ai.js';
-
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-const bad = (msg) => new HttpError(400, msg);
 
 const { logActivity } = data;
 const id = () => randomBytes(8).toString('hex');
@@ -42,6 +38,9 @@ function limit(max, windowMs) {
   };
 }
 
+// Kayıt, giriş ve şifre değiştirme uçlarında IP başına dakikadaki istek sınırı (testlerde AUTH_RATE_LIMIT ile gevşetilir)
+const AUTH_RATE = Number(process.env.AUTH_RATE_LIMIT) || 10;
+
 const str = (v, name, max = 100) => {
   if (typeof v !== 'string' || !v.trim() || v.trim().length > max) throw bad(`Geçersiz alan: ${name}`);
   return v.trim();
@@ -52,6 +51,10 @@ const kurus = (v, name) => {
 };
 
 export function createApp() {
+  // Süresi dolan oturumları açılışta ve saatte bir sil (oturum süresi yönetimi)
+  purgeExpiredSessions();
+  setInterval(purgeExpiredSessions, 3_600_000).unref();
+
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => {
@@ -70,29 +73,28 @@ export function createApp() {
   // ---------- Kimlik doğrulama ----------
   api.post(
     '/auth/register',
-    limit(10, 60_000),
+    limit(AUTH_RATE, 60_000),
     wrap(async (req, res) => {
       const name = str(req.body.name, 'ad', 50);
       const email = str(req.body.email, 'e-posta', 120).toLowerCase();
       const password = req.body.password;
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw bad('Geçersiz e-posta');
-      if (typeof password !== 'string' || password.length < 8) throw bad('Şifre en az 8 karakter olmalı');
+      validatePassword(password);
       if (data.emailExists(email)) throw new HttpError(409, 'Bu e-posta zaten kayıtlı');
       const userId = id();
+      // Rol istekten okunmaz (mass assignment): herkes 'user' olarak başlar, admin sadece sunucu tarafında atanır.
       data.createUser({ id: userId, name, email, passwordHash: await hashPassword(password) });
-      res.status(201).json({ token: newSession(userId), user: { id: userId, name, email } });
+      res.status(201).json({ token: newSession(userId), user: publicUser({ id: userId, name, email, role: 'user' }) });
     }),
   );
 
   api.post(
     '/auth/login',
-    limit(10, 60_000),
+    limit(AUTH_RATE, 60_000),
     wrap(async (req, res) => {
       const email = str(req.body.email, 'e-posta', 120).toLowerCase();
-      const user = data.findUserByEmail(email);
-      const ok = user && typeof req.body.password === 'string' && (await verifyPassword(req.body.password, user.password_hash));
-      if (!ok) throw new HttpError(401, 'E-posta veya şifre hatalı');
-      res.json({ token: newSession(user.id), user: { id: user.id, name: user.name, email: user.email } });
+      if (typeof req.body.password !== 'string') throw bad('Geçersiz alan: şifre');
+      res.json(await login(email, req.body.password));
     }),
   );
 
@@ -102,6 +104,36 @@ export function createApp() {
   });
 
   api.get('/me', requireAuth, (req, res) => res.json({ user: req.user }));
+
+  api.patch('/me', requireAuth, (req, res) => {
+    const name = str(req.body.name, 'ad', 50);
+    data.updateUserName(req.user.id, name);
+    res.json({ user: { ...req.user, name } });
+  });
+
+  api.post(
+    '/me/password',
+    requireAuth,
+    limit(AUTH_RATE, 60_000),
+    wrap(async (req, res) => {
+      const closed = await changePassword(req.user, req.body.currentPassword, req.body.newPassword, req.token);
+      res.json({ ok: true, closedSessions: closed });
+    }),
+  );
+
+  // ---------- Yönetici (rol tabanlı erişim) ----------
+  // Yetki kontrolü sunucudadır: arayüzde link gizlenmesi güvenlik sağlamaz, bu uçlar kendi başına korunur.
+  const adminOnly = [requireAuth, requireRole('admin')];
+
+  api.get('/admin/users', ...adminOnly, (req, res) => res.json({ users: data.listUsersWithStats() }));
+
+  api.patch('/admin/users/:uid/role', ...adminOnly, (req, res) => {
+    const role = req.body.role;
+    if (!['user', 'admin'].includes(role)) throw bad("role 'user' veya 'admin' olmalı");
+    if (req.params.uid === req.user.id) throw bad('Kendi rolünü değiştiremezsin');
+    if (!data.setUserRole(req.params.uid, role)) throw new HttpError(404, 'Kullanıcı bulunamadı');
+    res.json({ ok: true });
+  });
 
   // ---------- Gruplar ----------
   api.get('/groups', requireAuth, (req, res) => {

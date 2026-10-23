@@ -12,7 +12,9 @@ const mkUser = (id) => data.createUser({ id, name: `Kullanıcı ${id}`, email: `
 const mkGroup = (id, owner, code = id.toUpperCase().padEnd(8, 'X')) => data.createGroup({ id, name: `Grup ${id}`, ownerId: owner, inviteCode: code });
 
 test('migration: tüm tablolar, indeksler ve sürüm numarası kurulur', () => {
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 1);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2, '001 ve 002 uygulanmış olmalı');
+  const userCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  for (const c of ['role', 'failed_attempts', 'locked_until']) assert.ok(userCols.includes(c), `users.${c}`);
   const names = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name).sort();
   assert.deepEqual(names, ['activities', 'expense_splits', 'expenses', 'groups', 'members', 'rules', 'sessions', 'settlements', 'users']);
   const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'").all().map((r) => r.name).sort();
@@ -24,13 +26,40 @@ test('kullanıcılar: CRUD ve UNIQUE e-posta kısıtı', () => {
   mkUser('a1');
   assert.equal(data.emailExists('a1@example.com'), true);
   assert.equal(data.findUserByEmail('a1@example.com').id, 'a1');
-  assert.deepEqual(plain(data.findUserById('a1')), { id: 'a1', name: 'Kullanıcı a1', email: 'a1@example.com' });
+  assert.deepEqual(plain(data.findUserById('a1')), { id: 'a1', name: 'Kullanıcı a1', email: 'a1@example.com', role: 'user' });
   assert.throws(() => mkUser('a1'), /UNIQUE|PRIMARY KEY/);
   assert.throws(() => data.createUser({ id: 'a2', name: 'x', email: 'a1@example.com', passwordHash: 'x' }), /UNIQUE/);
   assert.equal(data.updateUserName('a1', 'Yeni Ad'), true);
   assert.equal(data.findUserById('a1').name, 'Yeni Ad');
   assert.equal(data.deleteUser('a1'), true);
   assert.equal(data.findUserById('a1'), undefined);
+});
+
+test('roller: varsayılan user, geçersiz rol CHECK ile reddedilir, rol değiştirilebilir', () => {
+  mkUser('r1');
+  assert.equal(data.findUserById('r1').role, 'user');
+  assert.equal(data.setUserRole('r1', 'admin'), true);
+  assert.equal(data.findUserById('r1').role, 'admin');
+  assert.throws(() => data.setUserRole('r1', 'superadmin'), /CHECK/);
+  assert.equal(data.setUserRole('olmayan', 'admin'), false);
+  assert.throws(() => data.createUser({ id: 'r2', name: 'x', email: 'r2@example.com', passwordHash: 'x', role: 'root' }), /CHECK/);
+});
+
+test('giriş kilidi: sayaç artar, eşikte kilitlenir ve sıfırlanır; admin listesi parola özeti içermez', () => {
+  mkUser('k1');
+  const row = () => data.findUserAuthRow('k1');
+  data.recordFailedLogin('k1', 3, 1000, 5000);
+  data.recordFailedLogin('k1', 3, 1000, 5000);
+  assert.equal(row().failed_attempts, 2);
+  assert.equal(row().locked_until, 0);
+  data.recordFailedLogin('k1', 3, 1000, 5000);
+  assert.equal(row().failed_attempts, 0, 'kilitlenince sayaç sıfırlanır');
+  assert.equal(row().locked_until, 6000);
+  data.clearFailedLogins('k1');
+  assert.equal(row().locked_until, 0);
+  const listed = data.listUsersWithStats();
+  assert.ok(listed.length > 0);
+  for (const u of listed) assert.deepEqual(Object.keys(u).sort(), ['createdAt', 'email', 'groupCount', 'id', 'name', 'role']);
 });
 
 test('gruplar ve üyelik: yabancı anahtar, N-N ara tablo ve cascade', () => {
@@ -89,6 +118,14 @@ test('ödeme kaydı, kurallar (UPSERT) ve etkinlik akışı', () => {
 
   for (let i = 1; i <= 3; i++) data.logActivity('yg', 'y1', `olay ${i}`, i);
   assert.deepEqual(data.listActivities('yg', 2).map((a) => a.message), ['olay 3', 'olay 2'], 'yeniden eskiye, limitli');
+});
+
+test('oturumlar: bir kullanıcının diğer oturumları silinir, belirtilen korunur', () => {
+  mkUser('o1');
+  for (const h of ['o-a', 'o-b', 'o-c']) data.createSession(h, 'o1', Date.now() + 60_000);
+  assert.equal(data.deleteSessionsOfUser('o1', 'o-b'), 2);
+  assert.equal(data.findUserBySession('o-b').role, 'user');
+  assert.equal(data.findUserBySession('o-a'), undefined);
 });
 
 test('oturumlar: süresi dolan oturum kullanıcıyı döndürmez', () => {

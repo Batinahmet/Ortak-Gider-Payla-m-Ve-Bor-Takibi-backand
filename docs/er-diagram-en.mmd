@@ -20,6 +20,9 @@ erDiagram
     text name
     text email UK
     text password_hash
+    text role "user veya admin"
+    int failed_attempts
+    int locked_until
     int created_at
   }
   SESSIONS {
