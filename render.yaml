@@ -1,0 +1,16 @@
+# Render.com ücretsiz web servisi (Blueprint). Gizli değerler panelden girilir, depoya yazılmaz.
+services:
+  - type: web
+    name: ortak-gider-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.13.0
+      - key: CORS_ORIGIN
+        sync: false   # örn. https://batinahmet.github.io
+      - key: ANTHROPIC_API_KEY
+        sync: false   # isteğe bağlı; boşsa fiş okuma kapalı kalır
