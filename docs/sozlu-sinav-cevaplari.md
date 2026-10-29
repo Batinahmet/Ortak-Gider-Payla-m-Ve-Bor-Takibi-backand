@@ -21,33 +21,41 @@ Hepsi taşır; satırı tekil tanımlamak ve yabancı anahtarlarla bağlanmak i�
 **5. `.gitignore` neden gerekli, neler eklenmemeli?**
 Gizli ve üretilebilir dosyaları depodan uzak tutar. Eklenmemesi gerekenler: `.env` (API anahtarı, şifreler), `node_modules/`, gerçek veritabanı dosyası (`/data/`), log ve işletim sistemi dosyaları. `.env.example` ise örnek olarak depoda durur.
 
-## Hafta 5: Kimlik doğrulama ve yetkilendirme
+## Hafta 4: Veritabanı tasarımı ve veri erişim katmanı
 
-Not: Hafta 5 soru listesi ekran görüntüsünden yeniden okunamadı; aşağıdakiler bu haftanın konularındaki tipik sorulardır. Resmî listeyle karşılaştırıp gerekirse eşleştir.
+**1. Bir tabloya neden indeks eklediğin/eklemedin?**
+İndeks, bir sütuna göre aramayı hızlandırır; kitabın sonundaki dizin gibi. Bedeli: yazmada ek iş ve ek yer. Bu yüzden sadece sık sorgulanan yerlere ekledim: `expenses (group_id, created_at)` (bir grubun harcamaları tarihe göre listelenir) ve `activities (group_id, id)` (etkinlik akışı). `users.email` ve `groups.invite_code` zaten `UNIQUE` olduğu için SQLite kendiliğinden indeks kurar, giriş ve davet kodu aramaları hızlıdır. `members`, `expense_splits` ve `rules` bileşik birincil anahtarı zaten indeks işi görür. `settlements` ve `rules` gibi küçük tablolara eklemedim; veri azken indeks fayda sağlamaz, sadece yazmayı yavaşlatır.
 
-**Kimlik doğrulama (authentication) ile yetkilendirme (authorization) farkı nedir?**
-Kimlik doğrulama "sen kimsin"i, yetkilendirme "bunu yapabilir misin"i cevaplar. Projede `requireAuth` ilkini (yoksa 401), `requireRole('admin')` ikincisini (yetki yoksa 403) yapar.
+**2. Yabancı anahtar kısıtı ne işe yarar?**
+Referans bütünlüğünü korur: olmayan bir gruba harcama veya olmayan bir kullanıcıya pay yazılamaz. `ON DELETE CASCADE` ile grup silinince üyelik, harcama, ödeme ve etkinlikleri de silinir; sahipsiz kayıt kalmaz. SQLite'ta varsayılan kapalı olduğu için her bağlantıda `PRAGMA foreign_keys = ON` açıyorum. Testte `PRAGMA foreign_key_check` boş dönüyor.
 
-**Şifreyi neden düz metin saklamıyorsun, nasıl saklıyorsun?**
-Veritabanı sızarsa tüm şifreler açığa çıkar. Şifre `scrypt` ile özetlenir (yavaş ve bellek isteyen, deneme pahalı), her şifreye 16 baytlık rastgele tuz eklenir; aynı şifre iki kullanıcıda farklı özet verir ve hazır tablo (rainbow table) işe yaramaz. Karşılaştırma `timingSafeEqual` ile yapılır.
+**3. N-N ilişkiyi nasıl modelledin?**
+Ara tabloyla. Kullanıcı ve grup arasında `members (group_id, user_id)` var; birincil anahtar çifttir, bu yüzden aynı kişi aynı gruba iki kez giremez. Harcama ve kullanıcı arasında da `expense_splits (expense_id, user_id, share)` aynı mantıkla çalışır ve ek olarak ilişkiye ait veriyi (payı) taşır.
 
-**Hash ile şifreleme (encryption) farkı?**
-Şifreleme anahtarla geri açılabilir, hash tek yönlüdür. Şifre geri okunmak zorunda olmadığı için hash kullanılır.
+**4. Migration neden kullanılır?**
+Şemayı sürümlü ve tekrarlanabilir biçimde değiştirmek için. Şema elle değil `db/migrations/001_...sql`, `002_...sql` dosyalarıyla kurulur; `PRAGMA user_version` hangisinin uygulandığını tutar, her dosya bir kez çalışır. Böylece herkesin veritabanı aynı şemaya sahip olur, değişiklik Git'te izlenir. Hafta 5'te mevcut dosyayı düzenlemek yerine 002 ekledim.
 
-**Oturum mu JWT mi, neden oturum?**
-Sunucuda tutulan rastgele belirteç seçtim. Veritabanında yalnızca SHA-256 özeti durur, sızarsa kullanılamaz. Çıkışta, şifre değişince ve süre dolunca sunucudan silinerek anında iptal edilir. JWT'de iptal zordur. Bedeli: her istekte veritabanı sorgusu, tek sunucuda önemsiz.
+**5. Bir CRUD işleminin SQL'ini açıkla.**
+Hepsi parametreli sorgudur (SQL enjeksiyonunu önler):
+- Create: `INSERT INTO groups (id, name, owner_id, invite_code, created_at) VALUES (?,?,?,?,?)`
+- Read: `SELECT * FROM groups WHERE id = ?`
+- Update: `UPDATE users SET name = ? WHERE id = ?`
+- Delete: `DELETE FROM expenses WHERE id = ?` (payları cascade ile silinir).
+Harcama eklemek gibi çok adımlı işlemler `tx()` ile tek transaction'da yapılır: harcama ve payları ya birlikte yazılır ya hiç.
 
-**Brute-force saldırısına karşı ne yaptın?**
-IP başına hız sınırı, 5 hatalı girişte 15 dakika hesap kilidi, "E-posta veya şifre hatalı" şeklinde genel mesaj ve olmayan e-postada da sahte hash hesabı (süreden hesap varlığı anlaşılmasın). Kilidin dezavantajı: biri başkasının hesabını geçici kilitleyebilir.
+## Hafta 5: Kullanıcı yönetimi ve kimlik doğrulama
 
-**Rol tabanlı erişim (RBAC) nasıl çalışıyor?**
-`users.role` `user` veya `admin`. Rol her istekte veritabanından okunur, token içine gömülmez; rolü değişen kullanıcı hemen etkilenir. Grup içinde ayrıca sahip/üye ayrımı vardır. Kontrol sunucudadır; arayüzde bağlantıyı gizlemek güvenlik değil, sadece kullanım kolaylığıdır.
+**1. Parolayı neden hash'liyoruz, tuz (salt) nedir?**
+Veritabanı sızsa bile parolalar okunamasın diye. Hash tek yönlüdür, parola geri çıkarılamaz; giriş yaparken girilen parola aynı şekilde hash'lenip karşılaştırılır. Tuz, her parolaya eklenen rastgele değerdir (bende 16 bayt). Aynı parolayı kullanan iki kişinin hash'i farklı çıkar ve hazır hash tabloları (rainbow table) işe yaramaz. Algoritma `scrypt`: yavaş ve bellek isteyen, bu yüzden deneme pahalıdır. Karşılaştırma `timingSafeEqual` ile yapılır.
 
-**Mass assignment nedir, nasıl önledin?**
-İstek gövdesindeki alanların körlemesine kayda yazılması. Kayıt isteğine `role: "admin"` eklenirse yok sayılır, rol yalnızca yönetici ucu veya `admin:promote` ile değişir.
+**2. Oturum ve token farkı nedir?**
+Oturum (session), durumun sunucuda tutulduğu yaklaşımdır: istemci sadece bir kimlik taşır, sunucu kim olduğunu tablodan bulur. Token yaklaşımında (JWT gibi) bilgi belirtecin içindedir ve sunucu imzayı doğrular, durum tutmaz. Benim projem karışık: istemciye rastgele opak bir belirteç veriyorum, sunucuda `sessions` tablosunda yalnızca SHA-256 özetini tutuyorum. Böylece oturumu anında iptal edebiliyorum (çıkış, şifre değişimi, süre dolması), JWT'de bu zordur. Bedeli her istekte bir veritabanı sorgusu; tek sunucuda önemsiz.
 
-**SQL enjeksiyonu ve XSS?**
-Tüm sorgular parametreli (`?`). Arayüzde kullanıcı metni `esc()` ile kaçırılarak basılır. Belirteç `localStorage`'da olduğu için XSS riski kalır; daha güçlü çözüm `httpOnly` çerez + CSRF koruması.
+**3. Rol tabanlı erişimi nasıl uyguladın?**
+`users.role` sütunu (`user` veya `admin`, `CHECK` kısıtlı). `requireAuth` giriş yoksa 401 verir; `requireRole('admin')` rol uymuyorsa 403 verir. Rol belirteçte değil, her istekte veritabanından okunur, bu yüzden rol değişince hemen geçerli olur. Kayıt isteğine `role: "admin"` yazılsa da yok sayılır (mass assignment koruması). Ayrıca grup içinde sahip/üye kontrolü var. Yönetici uçları: `/api/admin/users`.
 
-**Şifre değiştirmede neye dikkat ettin?**
-Önce mevcut şifre doğrulanır (çalınmış oturum şifreyi değiştiremesin), yanlış deneme kilide sayılır, yeni şifre eskisiyle aynı olamaz, başarılı olunca diğer tüm oturumlar kapanır.
+**4. Başarısız giriş denemesinde ne oluyor?**
+Her zaman aynı genel mesaj döner: "E-posta veya şifre hatalı"; hangisinin yanlış olduğu belli olmaz. Sayaç (`failed_attempts`) artar, 5 hatada hesap 15 dakika kilitlenir (`locked_until`), kilitliyken doğru parola da kabul edilmez, başarılı girişte sayaç sıfırlanır. Ek olarak IP başına hız sınırı vardır ve olmayan e-postada da sahte hash hesaplanır, böylece yanıt süresinden hesabın varlığı anlaşılmaz. Dezavantaj: biri başkasının hesabını kısa süre kilitleyebilir; hesabın ele geçirilmesinden daha hafif bir risk olduğu için bunu kabul ettim.
+
+**5. Yetkisiz kullanıcı korumalı sayfaya girerse ne olur?**
+Giriş yapmamışsa belirteç olmadığı için sunucu 401 döner ve arayüz giriş ekranını açar. Giriş yapmış ama yetkisiz (normal kullanıcı) `#/admin` adresini elle açarsa istek yine sunucuya gider, sunucu 403 "Bu işlem için yetkin yok" döner ve ekranda yalnızca bu hata görünür, hiçbir yönetici verisi gönderilmez. Menüde "Yönetim" bağlantısını sadece yöneticiye göstermem kolaylık içindir; asıl koruma sunucudadır. Testi var: aynı uç yetkisizde 403, yöneticide 200.
