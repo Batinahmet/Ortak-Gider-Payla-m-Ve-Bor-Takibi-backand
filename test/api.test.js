@@ -150,9 +150,9 @@ test('profil: ad değiştirme ve şifre değiştirme (diğer oturumlar kapanır)
 });
 
 test('ADMIN_EMAIL ile kayıt olan ilk yönetici olur, diğerleri olmaz', async () => {
-  process.env.ADMIN_EMAIL = 'Patron@Example.com';
+  process.env.ADMIN_EMAIL = 'Sahip@Example.com';
   try {
-    const a = (await call('POST', '/auth/register', { name: 'Patron', email: 'patron@example.com', password: 'sifre12345' })).data;
+    const a = (await call('POST', '/auth/register', { name: 'Sahip', email: 'sahip@example.com', password: 'sifre12345' })).data;
     const b = (await call('POST', '/auth/register', { name: 'Biri', email: 'biri@example.com', password: 'sifre12345' })).data;
     assert.equal(a.user.role, 'admin');
     assert.equal(b.user.role, 'user');

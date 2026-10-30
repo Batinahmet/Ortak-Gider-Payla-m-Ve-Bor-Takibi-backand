@@ -102,7 +102,7 @@ Kısa güvenlik gerekçeleri: [docs/guvenlik-notu.md](docs/guvenlik-notu.md)
 
 ## Testler
 
-`npm test` ile 40 test çalışır. Bölüşüm, veri katmanı, örnek veri ve kimlik doğrulama testleri Express'e ihtiyaç duymaz. `test/api.test.js` gerçek HTTP katmanını dener ve `npm install` gerektirir.
+`npm test` ile 41 test çalışır. Bölüşüm, veri katmanı, örnek veri ve kimlik doğrulama testleri Express'e ihtiyaç duymaz. `test/api.test.js` gerçek HTTP katmanını dener ve `npm install` gerektirir.
 
 ## Güvenlik
 
