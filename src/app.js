@@ -39,6 +39,7 @@ function limit(max, windowMs) {
 }
 
 // Kayıt, giriş ve şifre değiştirme uçlarında IP başına dakikadaki istek sınırı (testlerde AUTH_RATE_LIMIT ile gevşetilir)
+const adminEmail = () => (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 const AUTH_RATE = Number(process.env.AUTH_RATE_LIMIT) || 10;
 
 const str = (v, name, max = 100) => {
@@ -53,6 +54,8 @@ const kurus = (v, name) => {
 export function createApp() {
   // Süresi dolan oturumları açılışta ve saatte bir sil (oturum süresi yönetimi)
   purgeExpiredSessions();
+  const first = adminEmail() && data.findUserByEmail(adminEmail());
+  if (first && first.role !== 'admin') data.setUserRole(first.id, 'admin');
   setInterval(purgeExpiredSessions, 3_600_000).unref();
 
   const app = express();
@@ -83,8 +86,10 @@ export function createApp() {
       if (data.emailExists(email)) throw new HttpError(409, 'Bu e-posta zaten kayıtlı');
       const userId = id();
       // Rol istekten okunmaz (mass assignment): herkes 'user' olarak başlar, admin sadece sunucu tarafında atanır.
-      data.createUser({ id: userId, name, email, passwordHash: await hashPassword(password) });
-      res.status(201).json({ token: newSession(userId), user: publicUser({ id: userId, name, email, role: 'user' }) });
+      // Tek istisna: sunucu ortamındaki ADMIN_EMAIL ile aynı e-posta ilk yönetici olur (istekten değil, sunucu ayarından gelir).
+      const role = adminEmail() === email ? 'admin' : 'user';
+      data.createUser({ id: userId, name, email, passwordHash: await hashPassword(password), role });
+      res.status(201).json({ token: newSession(userId), user: publicUser({ id: userId, name, email, role }) });
     }),
   );
 

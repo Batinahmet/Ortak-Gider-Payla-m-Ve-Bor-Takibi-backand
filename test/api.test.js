@@ -148,3 +148,15 @@ test('profil: ad değiştirme ve şifre değiştirme (diğer oturumlar kapanır)
   assert.equal((await call('POST', '/auth/login', { email: 'profil@example.com', password: 'sifre1234' })).status, 401);
   assert.equal((await call('POST', '/auth/login', { email: 'profil@example.com', password: 'yeni-sifre-99' })).status, 200);
 });
+
+test('ADMIN_EMAIL ile kayıt olan ilk yönetici olur, diğerleri olmaz', async () => {
+  process.env.ADMIN_EMAIL = 'Patron@Example.com';
+  try {
+    const a = (await call('POST', '/auth/register', { name: 'Patron', email: 'patron@example.com', password: 'sifre12345' })).data;
+    const b = (await call('POST', '/auth/register', { name: 'Biri', email: 'biri@example.com', password: 'sifre12345' })).data;
+    assert.equal(a.user.role, 'admin');
+    assert.equal(b.user.role, 'user');
+    assert.equal((await call('GET', '/admin/users', null, a.token)).status, 200);
+    assert.equal((await call('GET', '/admin/users', null, b.token)).status, 403);
+  } finally { delete process.env.ADMIN_EMAIL; }
+});

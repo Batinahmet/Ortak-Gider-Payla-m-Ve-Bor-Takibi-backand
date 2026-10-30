@@ -17,3 +17,6 @@ Arayüz GitHub Pages'te, API Render'ın ücretsiz planında çalışır. İkisi 
 - **Veri kalıcı değil:** Render ücretsiz planında disk geçicidir; servis yeniden başlayınca SQLite veritabanı sıfırlanır, kullanıcılar yeniden kayıt olur. Sunum için yeterli, gerçek kullanım için kalıcı disk veya barındırılan veritabanı gerekir.
 - **Uyku:** 15 dakika kullanılmazsa servis uyur, ilk istek yaklaşık 30-60 saniye sürer.
 - **HTTPS** ikisinde de hazır gelir; belirteç `localStorage`'da olduğu için güvenlik notundaki sınırlar geçerlidir.
+
+## İlk yöneticiyi oluşturma
+Render ücretsiz planında komut satırı (Shell) yoktur, bu yüzden `admin:promote` çalıştırılamaz. Bunun yerine backend servisinin **Environment** sekmesine `ADMIN_EMAIL` ekle (kendi e-postan). Sitede bu e-postayla kayıt olan hesap yönetici olur; hesap zaten varsa servis yeniden başlarken yönetici yapılır. Giriş yapınca üstte **Yönetim** bağlantısı çıkar (`#/admin`).
