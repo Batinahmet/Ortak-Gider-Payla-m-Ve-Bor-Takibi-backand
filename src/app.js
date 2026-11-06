@@ -7,6 +7,7 @@ import {
   hashPassword, newSession, destroySession, requireAuth, requireRole, login, changePassword,
   validatePassword, publicUser, purgeExpiredSessions,
 } from './auth.js';
+import { validateSettlement, validateMemberRemoval, assertOwner, assertAmount, MAX_ITEMS } from './business-rules.js';
 import { HttpError, bad } from './errors.js';
 import {
   splitEqual,
@@ -47,7 +48,8 @@ const str = (v, name, max = 100) => {
   return v.trim();
 };
 const kurus = (v, name) => {
-  if (!Number.isInteger(v) || v <= 0 || v > 1_000_000_000) throw bad(`${name} pozitif tam sayı (kuruş) olmalı`);
+  if (!Number.isInteger(v)) throw bad(`${name} tam sayı (kuruş) olmalı`);
+  assertAmount(v, name); // iş kuralı: 0 < tutar <= 1.000.000 ₺
   return v;
 };
 
@@ -209,7 +211,7 @@ export function createApp() {
     let items = null;
     try {
       if (type === 'items') {
-        if (!Array.isArray(req.body.items) || !req.body.items.length || req.body.items.length > 100) throw bad('Kalem listesi geçersiz');
+        if (!Array.isArray(req.body.items) || !req.body.items.length || req.body.items.length > MAX_ITEMS) throw bad('Kalem listesi geçersiz');
         items = req.body.items.map((i) => ({
           name: str(i.name, 'kalem adı', 120),
           price: kurus(i.price, 'Kalem fiyatı'),
@@ -258,7 +260,9 @@ export function createApp() {
   const currentBalances = (gid) => {
     const memberIds = members(gid).map((m) => m.id);
     const settlements = data.listSettlements(gid);
-    const balances = computeBalances(memberIds, loadExpenses(gid), settlements);
+    const all = computeBalances(memberIds, loadExpenses(gid), settlements);
+    // Gruptan ayrılmış (bakiyesi sıfırlanmış) kişilerin eski kayıtları çıktıya karışmasın.
+    const balances = Object.fromEntries(Object.entries(all).filter(([u]) => memberIds.includes(u)));
     return { balances, transfers: minimizeTransfers(balances) };
   };
 
@@ -266,12 +270,38 @@ export function createApp() {
 
   groupRoutes.post('/settlements', (req, res) => {
     const to = req.body.to;
-    const amount = kurus(req.body.amount, 'Tutar');
-    if (!members(req.group.id).some((m) => m.id === to) || to === req.user.id) throw bad('Alıcı geçersiz');
+    const amount = kurus(req.body.amount, 'Ödeme tutarı');
+    if (typeof to !== 'string' || !members(req.group.id).some((m) => m.id === to)) throw bad('Alıcı geçersiz');
+    validateSettlement(currentBalances(req.group.id).balances, req.user.id, to, amount); // iş kuralları
     data.insertSettlement({ id: id(), groupId: req.group.id, fromUser: req.user.id, toUser: to, amount });
     const toName = members(req.group.id).find((m) => m.id === to).name;
     logActivity(req.group.id, req.user.id, `${req.user.name}, ${toName} kişisine ${tl(amount)} ödedi`);
     res.status(201).json({ ok: true });
+  });
+
+  // ---------- Üyelik yönetimi (ilişkili kayıtların tutarlılığı) ----------
+  // :uid yerine "me" yazılırsa kişi kendisi ayrılır.
+  groupRoutes.delete('/members/:uid', (req, res) => {
+    const targetId = req.params.uid === 'me' ? req.user.id : req.params.uid;
+    const gid = req.group.id;
+    const list = members(gid);
+    validateMemberRemoval({
+      group: req.group, actorId: req.user.id, targetId,
+      balances: currentBalances(gid).balances, memberCount: list.length,
+    });
+    const target = list.find((m) => m.id === targetId);
+    tx(() => {
+      data.removeMember(gid, targetId);
+      logActivity(gid, req.user.id, targetId === req.user.id ? `${target.name} gruptan ayrıldı` : `${req.user.name}, ${target.name} kişisini gruptan çıkardı`);
+    });
+    res.json({ ok: true });
+  });
+
+  // Grubu silmek harcama, pay, ödeme, kural ve etkinlikleri de siler (ON DELETE CASCADE).
+  groupRoutes.delete('/', (req, res) => {
+    assertOwner(req.group, req.user.id);
+    data.deleteGroup(req.group.id);
+    res.json({ ok: true });
   });
 
   groupRoutes.get('/activity', (req, res) => {

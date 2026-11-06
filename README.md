@@ -100,9 +100,15 @@ Kısa güvenlik gerekçeleri: [docs/guvenlik-notu.md](docs/guvenlik-notu.md)
 `GET /api/groups/:id/balances`, `POST /api/groups/:id/settlements`, `GET /api/groups/:id/activity`
 `GET|POST /api/groups/:id/rules`, `POST /api/groups/:id/receipts/scan`, `POST /api/groups/:id/summary`
 
+## Bölüşüm ve borç netleştirme (Hafta 7)
+
+Algoritmalar `src/split.js`, iş kuralları ve doğrulama `src/business-rules.js` içindedir. Kısa açıklama, kural tablosu ve entegrasyon: [docs/hafta7-bolusum-ve-netlestirme.md](docs/hafta7-bolusum-ve-netlestirme.md)
+
+Ek uçlar: `DELETE /api/groups/:id/members/:uid` (`me` yazılırsa kişi kendi ayrılır, bakiyesi sıfır olmalı), `DELETE /api/groups/:id` (sadece grup sahibi).
+
 ## Testler
 
-`npm test` ile 41 test çalışır. Bölüşüm, veri katmanı, örnek veri ve kimlik doğrulama testleri Express'e ihtiyaç duymaz. `test/api.test.js` gerçek HTTP katmanını dener ve `npm install` gerektirir.
+`npm test` ile 50 test çalışır. Bölüşüm, veri katmanı, örnek veri ve kimlik doğrulama testleri Express'e ihtiyaç duymaz. `test/api.test.js` gerçek HTTP katmanını dener ve `npm install` gerektirir.
 
 ## Güvenlik
 

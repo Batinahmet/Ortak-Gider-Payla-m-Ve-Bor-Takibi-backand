@@ -160,3 +160,33 @@ test('ADMIN_EMAIL ile kayıt olan ilk yönetici olur, diğerleri olmaz', async (
     assert.equal((await call('GET', '/admin/users', null, b.token)).status, 403);
   } finally { delete process.env.ADMIN_EMAIL; }
 });
+
+test('Hafta 7: ödeme iş kuralları, üyelik yönetimi ve grup silme (HTTP)', async () => {
+  const reg = async (n) => (await call('POST', '/auth/register', { name: n, email: `${n.toLowerCase()}-h7@example.com`, password: 'sifre12345' })).data;
+  const sahip = await reg('Sahip7'); const uye = await reg('Uye7'); const yabanci = await reg('Yabanci7');
+  const g = (await call('POST', '/groups', { name: 'Hafta7' }, sahip.token)).data;
+  const info = (await call('GET', `/groups/${g.id}`, null, sahip.token)).data;
+  await call('POST', '/groups/join', { code: info.inviteCode }, uye.token);
+  await call('POST', `/groups/${g.id}/expenses`, { title: 'Market', amount: 10000 }, sahip.token); // Üye 5000 borçlu
+  // fazla tutar yazım hatası
+  assert.equal((await call('POST', `/groups/${g.id}/expenses`, { title: 'x', amount: 100_000_001 }, sahip.token)).status, 400);
+  // alacaklı (sahip) ödeme kaydedemez; borçtan fazla ödenemez; borçlu doğru ödeme yapar
+  assert.equal((await call('POST', `/groups/${g.id}/settlements`, { to: uye.user.id, amount: 100 }, sahip.token)).status, 400);
+  assert.equal((await call('POST', `/groups/${g.id}/settlements`, { to: sahip.user.id, amount: 5001 }, uye.token)).status, 400);
+  // bakiyesi sıfır olmayan üye ayrılamaz
+  const blocked = await call('DELETE', `/groups/${g.id}/members/me`, null, uye.token);
+  assert.equal(blocked.status, 400);
+  assert.equal((await call('POST', `/groups/${g.id}/settlements`, { to: sahip.user.id, amount: 5000 }, uye.token)).status, 201);
+  // üye başkasını çıkaramaz, sahip kendi başına ayrılamaz
+  assert.equal((await call('DELETE', `/groups/${g.id}/members/${sahip.user.id}`, null, uye.token)).status, 403);
+  assert.equal((await call('DELETE', `/groups/${g.id}/members/me`, null, sahip.token)).status, 400);
+  // borcu kapanınca üye ayrılır; bakiye çıktısında eski üye görünmez; yabancı gruba erişemez
+  assert.equal((await call('DELETE', `/groups/${g.id}/members/me`, null, uye.token)).status, 200);
+  assert.equal((await call('GET', `/groups/${g.id}`, null, uye.token)).status, 404);
+  const { balances } = (await call('GET', `/groups/${g.id}/balances`, null, sahip.token)).data;
+  assert.deepEqual(Object.keys(balances), [sahip.user.id]);
+  // grubu sadece sahip siler
+  assert.equal((await call('DELETE', `/groups/${g.id}`, null, yabanci.token)).status, 404);
+  assert.equal((await call('DELETE', `/groups/${g.id}`, null, sahip.token)).status, 200);
+  assert.equal((await call('GET', `/groups/${g.id}`, null, sahip.token)).status, 404);
+});

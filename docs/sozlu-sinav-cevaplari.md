@@ -59,3 +59,20 @@ Her zaman aynı genel mesaj döner: "E-posta veya şifre hatalı"; hangisinin ya
 
 **5. Yetkisiz kullanıcı korumalı sayfaya girerse ne olur?**
 Giriş yapmamışsa belirteç olmadığı için sunucu 401 döner ve arayüz giriş ekranını açar. Giriş yapmış ama yetkisiz (normal kullanıcı) `#/admin` adresini elle açarsa istek yine sunucuya gider, sunucu 403 "Bu işlem için yetkin yok" döner ve ekranda yalnızca bu hata görünür, hiçbir yönetici verisi gönderilmez. Menüde "Yönetim" bağlantısını sadece yöneticiye göstermem kolaylık içindir; asıl koruma sunucudadır. Testi var: aynı uç yetkisizde 403, yöneticide 200.
+
+## Hafta 7: Bölüşüm ve borç netleştirme
+
+**1. Bölüşümü nasıl hesapladın?**
+Tüm tutarlar kuruş cinsinden tam sayıdır, kayan nokta kullanmıyorum. Eşit, yüzde, tutar ve kalem bazlı olmak üzere dört tip var, hepsi `distribute` fonksiyonuna iner. Bu fonksiyon en büyük kalan yöntemiyle çalışır: önce her payın tam kısmını verir, artan kuruşları kesirli kısmı en büyük olanlara dağıtır. 100,01 ₺ üç kişiye 33,34 + 33,34 + 33,33 olur ve toplam her zaman tutara eşittir. Yüzdelerin toplamı 100, tutarların toplamı harcamaya eşit değilse hata verir.
+
+**2. Borçları nasıl sadeleştirdin?**
+Önce bakiye hesaplanır: kişinin ödedikleri eksi payları, ödeme kayıtları eklenerek. Pozitif alacaklı, negatif borçlu. Sonra açgözlü yöntem: en çok borçlu en çok alacaklıya öder, biri sıfırlanınca sıradakine geçilir. N kişi için en fazla N−1 ödeme çıkar. Örneğin A'ya B 20 ₺, B'ye C 20 ₺ borçluysa C doğrudan A'ya 20 ₺ öder, B araya girmez. Açgözlü yöntem çoğu durumda en azı verir; kesin en az ödeme sayısı için alt küme toplamı problemi (NP-zor) gerekir, grup boyutlarında buna gerek görmedim.
+
+**3. Bu modülün verisini nasıl modelledin?**
+`expenses` (harcama) ile `expense_splits` (kişi başı pay) 1-N ilişkili, pay tablosunun anahtarı harcama + kullanıcı bileşik anahtarı. `settlements` ödeme kayıtlarını tutar. Bakiyeyi tabloda saklamıyorum, her seferinde harcama ve ödemelerden hesaplıyorum. Böylece harcama silinince bakiye ile kayıtlar arasında tutarsızlık olmaz. Harcama silinince payları `ON DELETE CASCADE` ile gider.
+
+**4. Bu modülde hangi iş kuralını neden koydun?**
+En önemlisi ödeme kuralı: ödeyen borçlu, alıcı alacaklı olmalı ve tutar borcu aşmamalı. Yoksa borcu olmayan biri ödeme kaydedip herkesin hesabını bozabilir. Diğerleri: tutar 0'dan büyük ve en fazla 1.000.000 ₺ (fazladan sıfır yazım hatası), katılımcılar grup üyesi olmalı, harcamayı sadece ekleyen veya grup sahibi silebilir, bakiyesi sıfır olmayan üye gruptan ayrılamaz (kalan üyelerin hesabı tutmaz). Kurallar sunucuda uygulanır; arayüzde gizlemek güvenlik sayılmaz.
+
+**5. Bu modülü diğer modüllerle nasıl entegre ettin?**
+Kimlik doğrulama ara katmanı ve grup üyeliği kontrolü her uçta çalışır. Üye listesi bakiye hesabının evrenidir. Harcama girişi, fiş okuma ve yapay zeka önerisi aynı `split.js` fonksiyonlarına çıkar; yapay zeka sadece kalemleri okur ve öneri verir, parayı algoritma hesaplar. Borç özeti netleştirme çıktısını anlatır. Her işlem etkinlik akışına (bildirim/geçmiş) yazılır, çok adımlı yazmalar tek transaction'dadır.
